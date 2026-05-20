@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "Fake WiFi Portal Detector",
+  "version": "0.1.0",
+  "identifier": "com.fakewifi.detector",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "Fake WiFi Portal Detector",
+        "width": 600,
+        "height": 400,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "assets/icon.png"
+    ]
+  },
+  "plugins": {
+    "notification": {
+      "enabled": true
+    },
+    "shell": {
+      "open": true
+    }
+  }
+}

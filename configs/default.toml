@@ -1,0 +1,34 @@
+[general]
+check_interval_secs = 30
+notification_timeout_secs = 10
+
+[probe]
+targets = [
+    "https://captive.g.apple.com/hotspot-detect.html",
+    "https://nmcheck.gnome.org/check_network_status.txt",
+    "http://connectivitycheck.platform.hmms.gov.cn/generate_204"
+]
+timeout_secs = 5
+expected_http_probe = "HTTP 204"
+
+[tls]
+require_valid_cert = true
+warn_self_signed = true
+warn_expired = true
+warn_hostname_mismatch = true
+
+[redirect]
+max_depth = 10
+suspicious_tlds = ["tk", "ml", "ga", "cf", "gq"]
+suspicious_keywords = ["login", "signin", "verify", "account", "update", "secure", "confirm"]
+
+[scoring]
+weights = { invalid_ssl = 40, hostname_mismatch = 35, suspicious_redirect = 25, phishing_login_page = 30, trusted_network_discount = -50 }
+
+[notifications]
+enabled = true
+show_detailed = true
+
+[database]
+path = "~/.local/share/fakewifi-detector/history.db"
+max_records = 10000
