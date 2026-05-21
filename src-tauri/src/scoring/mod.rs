@@ -26,6 +26,24 @@ impl RiskLevel {
             _ => RiskLevel::Critical,
         }
     }
+
+    pub fn color(&self) -> &'static str {
+        match self {
+            RiskLevel::Safe => "#00d4aa",
+            RiskLevel::Suspicious => "#ffd700",
+            RiskLevel::HighRisk => "#ff8800",
+            RiskLevel::Critical => "#ff4444",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            RiskLevel::Safe => "shield-check",
+            RiskLevel::Suspicious => "exclamation-triangle",
+            RiskLevel::HighRisk => "exclamation-circle",
+            RiskLevel::Critical => "ban",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +54,10 @@ pub struct ScoringInput {
     pub phishing_login_page: bool,
     pub is_trusted_network: bool,
     pub redirect_count: u32,
+    pub http_downgrade: bool,
+    pub self_signed_cert: bool,
+    pub suspicious_branding: bool,
+    pub hidden_form_inputs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +85,10 @@ pub struct RiskWeights {
     pub phishing_login_page: i32,
     pub trusted_network_discount: i32,
     pub per_redirect_point: i32,
+    pub http_downgrade: i32,
+    pub self_signed_cert: i32,
+    pub suspicious_branding: i32,
+    pub hidden_form_inputs: i32,
 }
 
 impl Default for RiskWeights {
@@ -74,6 +100,10 @@ impl Default for RiskWeights {
             phishing_login_page: 30,
             trusted_network_discount: -50,
             per_redirect_point: 2,
+            http_downgrade: 20,
+            self_signed_cert: 15,
+            suspicious_branding: 10,
+            hidden_form_inputs: 5,
         }
     }
 }
@@ -109,11 +139,27 @@ impl RiskEngine {
             });
         }
 
+        if input.self_signed_cert {
+            score += self.weights.self_signed_cert;
+            breakdown.push(ScoreBreakdown {
+                factor: "Self-signed certificate".to_string(),
+                points: self.weights.self_signed_cert,
+            });
+        }
+
         if input.suspicious_redirect {
             score += self.weights.suspicious_redirect;
             breakdown.push(ScoreBreakdown {
                 factor: "Suspicious redirect detected".to_string(),
                 points: self.weights.suspicious_redirect,
+            });
+        }
+
+        if input.http_downgrade {
+            score += self.weights.http_downgrade;
+            breakdown.push(ScoreBreakdown {
+                factor: "HTTPS to HTTP downgrade".to_string(),
+                points: self.weights.http_downgrade,
             });
         }
 
@@ -125,13 +171,29 @@ impl RiskEngine {
             });
         }
 
+        if input.suspicious_branding {
+            score += self.weights.suspicious_branding;
+            breakdown.push(ScoreBreakdown {
+                factor: "Suspicious branding mismatch".to_string(),
+                points: self.weights.suspicious_branding,
+            });
+        }
+
+        if input.hidden_form_inputs {
+            score += self.weights.hidden_form_inputs;
+            breakdown.push(ScoreBreakdown {
+                factor: "Hidden form inputs".to_string(),
+                points: self.weights.hidden_form_inputs,
+            });
+        }
+
         if input.redirect_count > 0 {
-            let redirect_points = (input.redirect_count as i32) * self.weights.per_redirect_point;
-            score += redirect_points;
-            if redirect_points > 0 {
+            let points = (input.redirect_count as i32) * self.weights.per_redirect_point;
+            score += points;
+            if points > 0 {
                 breakdown.push(ScoreBreakdown {
                     factor: format!("{} redirect hops", input.redirect_count),
-                    points: redirect_points,
+                    points,
                 });
             }
         }
@@ -170,14 +232,18 @@ mod tests {
             phishing_login_page: false,
             is_trusted_network: false,
             redirect_count: 0,
+            http_downgrade: false,
+            self_signed_cert: false,
+            suspicious_branding: false,
+            hidden_form_inputs: false,
         };
-        let result = engine.evaluate(&input);
-        assert_eq!(result.risk_level, RiskLevel::Safe);
-        assert_eq!(result.total_score, 0);
+        let r = engine.evaluate(&input);
+        assert_eq!(r.risk_level, RiskLevel::Safe);
+        assert_eq!(r.total_score, 0);
     }
 
     #[test]
-    fn test_critical_with_multiple_indicators() {
+    fn test_critical() {
         let engine = RiskEngine::new();
         let input = ScoringInput {
             invalid_ssl: true,
@@ -186,10 +252,14 @@ mod tests {
             phishing_login_page: true,
             is_trusted_network: false,
             redirect_count: 5,
+            http_downgrade: true,
+            self_signed_cert: true,
+            suspicious_branding: true,
+            hidden_form_inputs: true,
         };
-        let result = engine.evaluate(&input);
-        assert_eq!(result.risk_level, RiskLevel::Critical);
-        assert!(result.total_score >= 100);
+        let r = engine.evaluate(&input);
+        assert_eq!(r.risk_level, RiskLevel::Critical);
+        assert!(r.total_score >= 100);
     }
 
     #[test]
@@ -202,8 +272,51 @@ mod tests {
             phishing_login_page: false,
             is_trusted_network: true,
             redirect_count: 0,
+            http_downgrade: false,
+            self_signed_cert: false,
+            suspicious_branding: false,
+            hidden_form_inputs: false,
         };
-        let result = engine.evaluate(&input);
-        assert_eq!(result.total_score, 0);
+        let r = engine.evaluate(&input);
+        assert_eq!(r.total_score, 0);
+    }
+
+    #[test]
+    fn test_suspicious_threshold() {
+        let engine = RiskEngine::new();
+        let input = ScoringInput {
+            invalid_ssl: false,
+            hostname_mismatch: false,
+            suspicious_redirect: true,
+            phishing_login_page: false,
+            is_trusted_network: false,
+            redirect_count: 0,
+            http_downgrade: false,
+            self_signed_cert: false,
+            suspicious_branding: false,
+            hidden_form_inputs: false,
+        };
+        let r = engine.evaluate(&input);
+        assert_eq!(r.risk_level, RiskLevel::Suspicious);
+    }
+
+    #[test]
+    fn test_breakdown_count() {
+        let engine = RiskEngine::new();
+        let input = ScoringInput {
+            invalid_ssl: true,
+            hostname_mismatch: true,
+            suspicious_redirect: false,
+            phishing_login_page: false,
+            is_trusted_network: false,
+            redirect_count: 0,
+            http_downgrade: false,
+            self_signed_cert: false,
+            suspicious_branding: false,
+            hidden_form_inputs: false,
+        };
+        let r = engine.evaluate(&input);
+        assert_eq!(r.breakdown.len(), 2);
+        assert_eq!(r.total_score, 75);
     }
 }

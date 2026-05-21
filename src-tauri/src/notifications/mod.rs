@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertContent {
@@ -9,20 +11,45 @@ pub struct AlertContent {
     pub body: String,
     pub risk_level: String,
     pub risk_score: i32,
+    pub severity: String,
     pub actions: Vec<String>,
 }
 
-pub struct NotificationManager;
+pub struct NotificationManager {
+    recent_alerts: Mutex<HashSet<String>>,
+}
+
+impl Default for NotificationManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NotificationManager {
     pub fn new() -> Self {
-        NotificationManager
+        NotificationManager {
+            recent_alerts: Mutex::new(HashSet::new()),
+        }
     }
 
-    pub fn send_alert(app: &AppHandle, content: &AlertContent) {
+    pub fn send_alert(&self, app: &AppHandle, content: &AlertContent) {
+        let dedup_key = format!("{}|{}", content.title, content.risk_level);
+
+        {
+            let mut recent = self.recent_alerts.lock().unwrap();
+            if recent.contains(&dedup_key) {
+                debug!("Suppressing duplicate alert: {}", dedup_key);
+                return;
+            }
+            recent.insert(dedup_key.clone());
+            if recent.len() > 50 {
+                recent.clear();
+            }
+        }
+
         info!(
-            "Sending notification: {} - {}",
-            content.title, content.risk_level
+            "Alert [{}] {} — score={}",
+            content.severity, content.title, content.risk_score
         );
 
         let body = if content.actions.is_empty() {
@@ -31,77 +58,127 @@ impl NotificationManager {
             format!("{}\n\nActions: {}", content.body, content.actions.join(" | "))
         };
 
-        let _ = app.notification()
-            .builder()
-            .title(&content.title)
-            .body(&body)
-            .show();
+        match app.notification().builder().title(&content.title).body(&body).show() {
+            Ok(_) => debug!("Notification sent: {}", content.title),
+            Err(e) => warn!("Failed to send notification: {}", e),
+        }
     }
 
-    pub fn safe_notification(app: &AppHandle, ssid: &str) {
-        let content = AlertContent {
-            title: "WiFi Connection Safe".to_string(),
-            body: format!("Connected to \"{}\" — no threats detected.", ssid),
-            risk_level: "Safe".to_string(),
-            risk_score: 0,
-            actions: vec!["View Details".to_string(), "Trust Network".to_string()],
-        };
-        Self::send_alert(app, &content);
+    pub fn safe(&self, app: &AppHandle, ssid: &str) {
+        self.send_alert(
+            app,
+            &AlertContent {
+                title: "WiFi Connection Safe".to_string(),
+                body: format!(
+                    "Connected to \"{}\" — no threats detected. Network appears legitimate.",
+                    ssid
+                ),
+                risk_level: "Safe".to_string(),
+                risk_score: 0,
+                severity: "info".to_string(),
+                actions: vec!["View Details".to_string(), "Trust Network".to_string()],
+            },
+        );
     }
 
-    pub fn suspicious_notification(app: &AppHandle, ssid: &str, reasons: &[String]) {
-        let reason_text = reasons.join("\n");
-        let content = AlertContent {
-            title: "Suspicious WiFi Network Detected".to_string(),
-            body: format!(
-                "Network \"{}\" shows suspicious behavior:\n{}",
-                ssid, reason_text
-            ),
-            risk_level: "Suspicious".to_string(),
-            risk_score: 30,
-            actions: vec![
-                "View Details".to_string(),
-                "Ignore".to_string(),
-                "Trust Network".to_string(),
-            ],
+    pub fn suspicious(&self, app: &AppHandle, ssid: &str, reasons: &[String]) {
+        let body = if reasons.is_empty() {
+            format!(
+                "Network \"{}\" triggered a suspicious detection. Review recommended.",
+                ssid
+            )
+        } else {
+            format!(
+                "Network \"{}\" shows suspicious behavior:\n• {}",
+                ssid,
+                reasons.join("\n• ")
+            )
         };
-        Self::send_alert(app, &content);
+
+        self.send_alert(
+            app,
+            &AlertContent {
+                title: "Suspicious WiFi Network".to_string(),
+                body,
+                risk_level: "Suspicious".to_string(),
+                risk_score: 35,
+                severity: "warning".to_string(),
+                actions: vec![
+                    "View Details".to_string(),
+                    "Ignore".to_string(),
+                    "Trust Network".to_string(),
+                ],
+            },
+        );
     }
 
-    pub fn critical_notification(app: &AppHandle, ssid: &str, reasons: &[String]) {
-        let reason_text = reasons.join("\n");
-        let content = AlertContent {
-            title: "Critical — Fake WiFi Portal Detected".to_string(),
-            body: format!(
-                "DANGER: \"{}\" may be attempting credential phishing:\n{}",
-                ssid, reason_text
-            ),
-            risk_level: "Critical".to_string(),
-            risk_score: 80,
-            actions: vec![
-                "View Details".to_string(),
-                "Ignore".to_string(),
-                "Trust Network".to_string(),
-            ],
-        };
-        Self::send_alert(app, &content);
+    pub fn high_risk(&self, app: &AppHandle, ssid: &str, reasons: &[String]) {
+        let body = format!(
+            "HIGH RISK on \"{}\":\n• {}\n\nAvoid entering any credentials.",
+            ssid,
+            reasons.join("\n• ")
+        );
+
+        self.send_alert(
+            app,
+            &AlertContent {
+                title: "⚠ High Risk WiFi Detected".to_string(),
+                body,
+                risk_level: "High Risk".to_string(),
+                risk_score: 65,
+                severity: "error".to_string(),
+                actions: vec![
+                    "View Details".to_string(),
+                    "Ignore".to_string(),
+                    "Trust Network".to_string(),
+                ],
+            },
+        );
     }
 
-    pub fn phishing_login_warning(app: &AppHandle, domain: &str) {
-        let content = AlertContent {
-            title: "Suspicious Login Page Detected".to_string(),
-            body: format!(
-                "The page at {} appears to be a phishing attempt. \
-                 Do not enter your credentials.",
-                domain
-            ),
-            risk_level: "Critical".to_string(),
-            risk_score: 70,
-            actions: vec![
-                "View Details".to_string(),
-                "Ignore".to_string(),
-            ],
-        };
-        Self::send_alert(app, &content);
+    pub fn critical(&self, app: &AppHandle, ssid: &str, reasons: &[String]) {
+        let body = format!(
+            "🚨 CRITICAL — \"{}\" is likely a fake captive portal:\n• {}\n\nDo NOT enter any credentials. Disconnect immediately.",
+            ssid,
+            reasons.join("\n• ")
+        );
+
+        self.send_alert(
+            app,
+            &AlertContent {
+                title: "🚨 Fake WiFi Portal Detected".to_string(),
+                body,
+                risk_level: "Critical".to_string(),
+                risk_score: 90,
+                severity: "critical".to_string(),
+                actions: vec![
+                    "View Details".to_string(),
+                    "Ignore".to_string(),
+                    "Trust Network".to_string(),
+                ],
+            },
+        );
+    }
+
+    pub fn phishing_login(&self, app: &AppHandle, domain: &str, reasons: &[String]) {
+        let body = format!(
+            "The page at \"{}\" appears to be a phishing attempt:\n• {}\n\nDo not enter your credentials.",
+            domain,
+            reasons.join("\n• ")
+        );
+
+        self.send_alert(
+            app,
+            &AlertContent {
+                title: "🚨 Phishing Login Page Detected".to_string(),
+                body,
+                risk_level: "Critical".to_string(),
+                risk_score: 80,
+                severity: "critical".to_string(),
+                actions: vec!["View Details".to_string(), "Ignore".to_string()],
+            },
+        );
     }
 }
+
+

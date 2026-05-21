@@ -25,6 +25,7 @@ pub struct AppState {
     pub redirect_analyzer: RedirectAnalyzer,
     pub risk_engine: RiskEngine,
     pub tls_validator: tls::TlsValidator,
+    pub notifications: notifications::NotificationManager,
 }
 
 #[tauri::command]
@@ -81,6 +82,7 @@ pub fn run() {
                 redirect_analyzer: RedirectAnalyzer::new(),
                 risk_engine: RiskEngine::new(),
                 tls_validator: tls::TlsValidator::new(),
+                notifications: notifications::NotificationManager::new(),
             };
 
             let icon = Image::from_bytes(include_bytes!("../../assets/icon.png"))
@@ -149,7 +151,6 @@ pub fn run() {
 
 fn run_scan(app: &AppHandle, ssid: &str) {
     use login_analyzer::LoginPageAnalyzer;
-    use notifications::NotificationManager;
     use tracing::{error, info};
 
     let state: State<AppState> = app.state();
@@ -169,9 +170,13 @@ fn run_scan(app: &AppHandle, ssid: &str) {
     let mut reasons: Vec<String> = Vec::new();
     let mut invalid_ssl = false;
     let mut hostname_mismatch = false;
+    let mut self_signed_cert = false;
     let mut suspicious_redirect = false;
     let mut phishing_login_page = false;
     let mut redirect_count: u32 = 0;
+    let mut http_downgrade = false;
+    let mut suspicious_branding = false;
+    let mut hidden_form_inputs = false;
 
     let mut target_domain = String::new();
 
@@ -194,6 +199,7 @@ fn run_scan(app: &AppHandle, ssid: &str) {
                     let analysis = state.redirect_analyzer.analyze(redirect_url);
                     suspicious_redirect = analysis.suspicious;
                     redirect_count = analysis.redirect_count;
+                    http_downgrade = analysis.http_downgrade;
 
                     if analysis.suspicious {
                         reasons.extend(analysis.reasons.clone());
@@ -205,6 +211,8 @@ fn run_scan(app: &AppHandle, ssid: &str) {
                     let login_result = la.analyze(&result.body_preview, url);
                     if login_result.is_login_page {
                         phishing_login_page = true;
+                        suspicious_branding = login_result.has_suspicious_branding;
+                        hidden_form_inputs = login_result.has_hidden_inputs;
                         reasons.extend(login_result.suspicious_indicators);
                     }
                 }
@@ -216,6 +224,7 @@ fn run_scan(app: &AppHandle, ssid: &str) {
         let tls_result = state.tls_validator.validate(&target_domain, 443);
         invalid_ssl = !tls_result.valid;
         hostname_mismatch = !tls_result.hostname_match;
+        self_signed_cert = tls_result.self_signed;
 
         if invalid_ssl {
             reasons.push(format!(
@@ -224,10 +233,10 @@ fn run_scan(app: &AppHandle, ssid: &str) {
             ));
         }
         if hostname_mismatch {
-            reasons.push(format!(
-                "SSL hostname mismatch for {}",
-                target_domain
-            ));
+            reasons.push(format!("SSL hostname mismatch for {}", target_domain));
+        }
+        if self_signed_cert {
+            reasons.push("Self-signed certificate in use".to_string());
         }
     }
 
@@ -238,6 +247,10 @@ fn run_scan(app: &AppHandle, ssid: &str) {
         phishing_login_page,
         is_trusted_network: is_trusted,
         redirect_count,
+        http_downgrade,
+        self_signed_cert,
+        suspicious_branding,
+        hidden_form_inputs,
     };
 
     let score_result = state.risk_engine.evaluate(&scoring_input);
@@ -264,13 +277,16 @@ fn run_scan(app: &AppHandle, ssid: &str) {
 
     match score_result.risk_level {
         scoring::RiskLevel::Safe => {
-            NotificationManager::safe_notification(app, ssid);
+            state.notifications.safe(app, ssid);
         }
         scoring::RiskLevel::Suspicious => {
-            NotificationManager::suspicious_notification(app, ssid, &reasons);
+            state.notifications.suspicious(app, ssid, &reasons);
         }
-        scoring::RiskLevel::HighRisk | scoring::RiskLevel::Critical => {
-            NotificationManager::critical_notification(app, ssid, &reasons);
+        scoring::RiskLevel::HighRisk => {
+            state.notifications.high_risk(app, ssid, &reasons);
+        }
+        scoring::RiskLevel::Critical => {
+            state.notifications.critical(app, ssid, &reasons);
         }
     }
 }
