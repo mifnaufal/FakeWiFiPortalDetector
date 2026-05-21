@@ -181,4 +181,42 @@ impl NotificationManager {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_alert_content_creation() {
+        let content = AlertContent {
+            title: "Test Alert".to_string(),
+            body: "Test body".to_string(),
+            risk_level: "Safe".to_string(),
+            risk_score: 0,
+            severity: "info".to_string(),
+            actions: vec!["OK".to_string()],
+        };
+        assert_eq!(content.title, "Test Alert");
+        assert_eq!(content.risk_score, 0);
+    }
+
+    #[test]
+    fn test_alert_with_actions() {
+        let content = AlertContent {
+            title: "Alert".to_string(),
+            body: "Body".to_string(),
+            risk_level: "Critical".to_string(),
+            risk_score: 80,
+            severity: "critical".to_string(),
+            actions: vec!["View".to_string(), "Ignore".to_string()],
+        };
+        assert_eq!(content.actions.len(), 2);
+    }
+
+    #[test]
+    fn test_notification_manager_creation() {
+        let manager = NotificationManager::new();
+        let recent = manager.recent_alerts.lock().unwrap();
+        assert!(recent.is_empty());
+    }
+}
 

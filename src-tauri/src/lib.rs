@@ -1,3 +1,4 @@
+pub mod config;
 pub mod database;
 pub mod logging;
 pub mod login_analyzer;
@@ -72,7 +73,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let db = Database::new(None).expect("Failed to initialize database");
+            let cfg = config::AppConfig::load(None);
+            let db_path = cfg.database_path();
+            let db = Database::new(Some(db_path))
+                .expect("Failed to initialize database");
             let monitor = NetworkMonitor::new();
 
             let state = AppState {
@@ -105,6 +109,8 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            let check_interval = cfg.general.check_interval_secs;
 
             app.manage(state);
 

@@ -87,6 +87,50 @@ mod tests {
     fn test_tls_validator_creation() {
         let validator = TlsValidator::new();
         let result = validator.validate("example.com", 443);
+        assert!(!result.valid || result.expired);
+    }
+
+    #[test]
+    fn test_tls_result_defaults() {
+        let r = TlsResult {
+            valid: false,
+            expired: false,
+            self_signed: false,
+            hostname_match: false,
+            error_message: None,
+        };
+        assert!(!r.valid);
+        assert!(r.error_message.is_none());
+    }
+
+    #[test]
+    fn test_tls_result_with_error() {
+        let r = TlsResult {
+            valid: false,
+            expired: true,
+            self_signed: false,
+            hostname_match: false,
+            error_message: Some("expired certificate".to_string()),
+        };
+        assert!(r.expired);
+        assert_eq!(
+            r.error_message.as_deref(),
+            Some("expired certificate")
+        );
+    }
+
+    #[test]
+    fn test_tls_unknown_host() {
+        let validator = TlsValidator::new();
+        let result = validator.validate("invalid-host-that-does-not-exist-xyz.com", 443);
+        assert!(!result.valid);
+        assert!(result.error_message.is_some());
+    }
+
+    #[test]
+    fn test_tls_bad_port() {
+        let validator = TlsValidator::new();
+        let result = validator.validate("example.com", 1);
         assert!(!result.valid);
     }
 }

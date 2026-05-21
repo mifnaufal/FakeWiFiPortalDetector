@@ -180,3 +180,85 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_db() -> Database {
+        let path = PathBuf::from("/tmp/fakewifi_test.db");
+        let _ = std::fs::remove_file(&path);
+        Database::new(Some(path)).unwrap()
+    }
+
+    #[test]
+    fn test_create_tables() {
+        let db = test_db();
+        let trusted = db.list_trusted_networks().unwrap();
+        assert!(trusted.is_empty());
+    }
+
+    #[test]
+    fn test_add_and_check_trusted() {
+        let db = test_db();
+        db.add_trusted_network("TestSSID", None).unwrap();
+        assert!(db.is_trusted_network("TestSSID").unwrap());
+        assert!(!db.is_trusted_network("Unknown").unwrap());
+    }
+
+    #[test]
+    fn test_add_and_remove_trusted() {
+        let db = test_db();
+        db.add_trusted_network("TestSSID", None).unwrap();
+        db.remove_trusted_network("TestSSID").unwrap();
+        assert!(!db.is_trusted_network("TestSSID").unwrap());
+    }
+
+    #[test]
+    fn test_list_trusted() {
+        let db = test_db();
+        db.add_trusted_network("NetA", None).unwrap();
+        db.add_trusted_network("NetB", None).unwrap();
+        let list = db.list_trusted_networks().unwrap();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_insert_scan_log() {
+        let db = test_db();
+        db.insert_scan_log("TestSSID", "example.com", 25, "Suspicious", "SSL issue")
+            .unwrap();
+        let logs = db.get_recent_logs(10).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].ssid, "TestSSID");
+        assert_eq!(logs[0].risk_score, 25);
+    }
+
+    #[test]
+    fn test_get_recent_logs_limit() {
+        let db = test_db();
+        for i in 0..5 {
+            db.insert_scan_log(
+                &format!("SSID{}", i),
+                "example.com",
+                i * 10,
+                "Safe",
+                "",
+            )
+            .unwrap();
+        }
+        let logs = db.get_recent_logs(3).unwrap();
+        assert_eq!(logs.len(), 3);
+    }
+
+    #[test]
+    fn test_settings() {
+        let db = test_db();
+        assert!(db.get_setting("theme").unwrap().is_none());
+        db.set_setting("theme", "dark").unwrap();
+        assert_eq!(db.get_setting("theme").unwrap(), Some("dark".to_string()));
+        db.set_setting("theme", "light").unwrap();
+        assert_eq!(db.get_setting("theme").unwrap(), Some("light".to_string()));
+    }
+}

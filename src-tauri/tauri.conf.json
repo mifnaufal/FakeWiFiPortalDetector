@@ -26,10 +26,26 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["appimage", "deb", "rpm"],
     "icon": [
       "assets/icon.png"
-    ]
+    ],
+    "category": "Utility",
+    "shortDescription": "Fake WiFi captive portal detector",
+    "longDescription": "A lightweight desktop application that monitors WiFi networks and detects fake captive portals, phishing login pages, and SSL/TLS anomalies.",
+    "copyright": "MIT License",
+    "publisher": "Fake WiFi Portal Detector Project",
+    "linux": {
+      "deb": {
+        "depends": ["libgtk-3-0", "libwebkit2gtk-4.1-0", "libjavascriptcoregtk-4.1-0", "libappindicator3-1"]
+      },
+      "rpm": {
+        "depends": ["gtk3", "webkit2gtk4.1", "libappindicator-gtk3"]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
   },
   "plugins": {
     "notification": {
