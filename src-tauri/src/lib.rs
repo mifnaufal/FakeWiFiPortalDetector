@@ -1,4 +1,5 @@
 pub mod database;
+pub mod logging;
 pub mod login_analyzer;
 pub mod network;
 pub mod notifications;
@@ -64,7 +65,7 @@ fn get_current_ssid() -> Result<Option<String>, String> {
 }
 
 pub fn run() {
-    tracing_subscriber::fmt().init();
+    logging::setup(None, "info");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -147,9 +148,13 @@ pub fn run() {
 }
 
 fn run_scan(app: &AppHandle, ssid: &str) {
+    use login_analyzer::LoginPageAnalyzer;
     use notifications::NotificationManager;
+    use tracing::{error, info};
 
     let state: State<AppState> = app.state();
+
+    info!("Running scan for SSID: {}", ssid);
 
     let is_trusted = state
         .db
@@ -168,9 +173,23 @@ fn run_scan(app: &AppHandle, ssid: &str) {
     let mut phishing_login_page = false;
     let mut redirect_count: u32 = 0;
 
+    let mut target_domain = String::new();
+
     if captive_detected {
         for result in &probe_results {
             if result.captive_portal_detected {
+                let url = result
+                    .redirect_url
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or(&result.probe_target);
+
+                if target_domain.is_empty() {
+                    if let Some(domain) = extract_domain(url) {
+                        target_domain = domain;
+                    }
+                }
+
                 if let Some(ref redirect_url) = result.redirect_url {
                     let analysis = state.redirect_analyzer.analyze(redirect_url);
                     suspicious_redirect = analysis.suspicious;
@@ -180,21 +199,35 @@ fn run_scan(app: &AppHandle, ssid: &str) {
                         reasons.extend(analysis.reasons.clone());
                     }
                 }
+
+                if !result.body_preview.is_empty() {
+                    let la = LoginPageAnalyzer::new();
+                    let login_result = la.analyze(&result.body_preview, url);
+                    if login_result.is_login_page {
+                        phishing_login_page = true;
+                        reasons.extend(login_result.suspicious_indicators);
+                    }
+                }
             }
         }
     }
 
-    if !ssid.is_empty() {
-        let domain = format!("{}.com", ssid.split_whitespace().next().unwrap_or("unknown"));
-        let tls_result = state.tls_validator.validate(&domain, 443);
+    if !target_domain.is_empty() {
+        let tls_result = state.tls_validator.validate(&target_domain, 443);
         invalid_ssl = !tls_result.valid;
         hostname_mismatch = !tls_result.hostname_match;
 
         if invalid_ssl {
-            reasons.push("Invalid or expired SSL certificate".to_string());
+            reasons.push(format!(
+                "Invalid SSL for {} (expired={})",
+                target_domain, tls_result.expired
+            ));
         }
         if hostname_mismatch {
-            reasons.push("SSL certificate hostname mismatch".to_string());
+            reasons.push(format!(
+                "SSL hostname mismatch for {}",
+                target_domain
+            ));
         }
     }
 
@@ -209,18 +242,25 @@ fn run_scan(app: &AppHandle, ssid: &str) {
 
     let score_result = state.risk_engine.evaluate(&scoring_input);
 
-    let _ = state.db.lock().map(|db| {
-        let _ = db.insert_scan_log(
+    if let Err(e) = state.db.lock().map(|db| {
+        db.insert_scan_log(
             ssid,
-            &probe_results
-                .first()
-                .map(|r| r.probe_target.clone())
-                .unwrap_or_default(),
+            &target_domain,
             score_result.total_score,
             score_result.risk_level.as_str(),
             &reasons.join("; "),
-        );
-    });
+        )
+    }) {
+        error!("Failed to insert scan log: {}", e);
+    }
+
+    info!(
+        "Scan complete for {} — score={}, level={}, reasons={}",
+        ssid,
+        score_result.total_score,
+        score_result.risk_level.as_str(),
+        reasons.len()
+    );
 
     match score_result.risk_level {
         scoring::RiskLevel::Safe => {
@@ -233,4 +273,10 @@ fn run_scan(app: &AppHandle, ssid: &str) {
             NotificationManager::critical_notification(app, ssid, &reasons);
         }
     }
+}
+
+fn extract_domain(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_string()))
 }
